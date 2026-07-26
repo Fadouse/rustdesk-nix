@@ -16,6 +16,8 @@
         default = rustdesk;
       };
 
+      nixosModules.default = import ./nixos-module.nix { inherit self; };
+
       checks.${system} = {
         package = rustdesk;
         updater-tests =

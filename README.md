@@ -10,6 +10,27 @@ nix build .#rustdesk
 nix flake check --print-build-logs
 ```
 
+For unattended access on NixOS, import and enable the included module:
+
+```nix
+{
+  inputs.rustdesk-nix.url = "path:/path/to/rustdesk-nix";
+
+  outputs = { nixpkgs, rustdesk-nix, ... }: {
+    nixosConfigurations.example = nixpkgs.lib.nixosSystem {
+      modules = [
+        rustdesk-nix.nixosModules.default
+        { services.rustdesk.enable = true; }
+      ];
+    };
+  };
+}
+```
+
+The module installs the same package system-wide and runs `rustdesk --service`
+as a root system service. Do not also add the package separately through Home
+Manager unless you intentionally want duplicate profile entries.
+
 ## Updating
 
 ```bash
