@@ -1,0 +1,62 @@
+name: Update RustDesk
+
+on:
+  schedule:
+    - cron: "47 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-rustdesk
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Test updater
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Check for a stable RustDesk release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/update.py
+
+      - name: Detect package changes
+        id: changes
+        shell: bash
+        run: |
+          if git diff --quiet -- package.nix; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Nix
+        if: steps.changes.outputs.changed == 'true'
+        uses: cachix/install-nix-action@b4b293eae0b79aac8a161bb32925a5508c9cca93 # v31
+
+      - name: Check and build updated package
+        if: steps.changes.outputs.changed == 'true'
+        run: nix flake check --print-build-logs
+
+      - name: Open or update the release pull request
+        if: steps.changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        with:
+          branch: automation/update-rustdesk
+          delete-branch: true
+          commit-message: "rustdesk: update official stable release"
+          title: "rustdesk: update official stable release"
+          body: |
+            Automated update from RustDesk's official stable GitHub release.
+
+            The updater verifies GitHub's asset digest and AppImage format, then builds the Nix package before opening this PR. Release binaries are not committed to this repository.
