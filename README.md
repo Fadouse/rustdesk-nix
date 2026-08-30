@@ -28,10 +28,9 @@ For unattended access on NixOS, import and enable the included module:
 ```
 
 The module installs the same package system-wide, runs `rustdesk --service` as
-a root system service, and starts `rustdesk --server` in each active graphical
-user session. The user server keeps unattended Wayland connections available
-after the main RustDesk window is closed. Do not also add the package separately
-through Home Manager unless you intentionally want duplicate profile entries.
+a root system service, and lets RustDesk start one server process for the active
+graphical user. Do not also add the package separately through Home Manager
+unless you intentionally want duplicate profile entries.
 
 ## Updating
 

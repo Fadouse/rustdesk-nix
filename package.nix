@@ -54,7 +54,15 @@ let
         --set-interpreter ${stdenv.cc.bintools.dynamicLinker} $out/AppRun
       ${patchelf}/bin/patchelf \
         --set-interpreter ${stdenv.cc.bintools.dynamicLinker} \
+        --force-rpath \
+        --set-rpath \
+          "${runtimeLibraryPath}:$out/lib/x86_64-linux-gnu:$out/usr/lib/x86_64-linux-gnu:$out/usr/share/rustdesk/lib" \
         $out/usr/share/rustdesk/rustdesk
+      ${patchelf}/bin/patchelf \
+        --force-rpath \
+        --set-rpath \
+          "${runtimeLibraryPath}:$out/lib/x86_64-linux-gnu:$out/usr/lib/x86_64-linux-gnu:$out/usr/share/rustdesk/lib" \
+        $out/usr/share/rustdesk/lib/librustdesk.so
 
       substituteInPlace $out/AppRun.env \
         --replace-fail "APPDIR_LIBRARY_PATH=" \
@@ -78,7 +86,7 @@ let
       # Bundled generic-Linux utilities such as loginctl cannot execute on
       # NixOS.  Prefer host commands so the service can resolve the active
       # logind session and the GUI can invoke the host sudo wrapper.
-      sed -i 's|^PATH=.*|PATH=$PATH|' $out/AppRun.env
+      sed -i 's|^PATH=.*|PATH=/run/wrappers/bin:$PATH|' $out/AppRun.env
     '';
   };
 in
