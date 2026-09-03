@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""Verify private release assets and add the two archives to the Nix store."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import re
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+METADATA = ROOT / "release" / "metadata.json"
+REPOSITORY = "Fadouse/rustdesk-build"
+VARIANTS = ("x86_64-v3", "znver5")
+HEX_RE = re.compile(r"[0-9a-f]{64}")
+SUM_RE = re.compile(r"([0-9a-f]{64})  ([A-Za-z0-9][A-Za-z0-9._+-]*)")
+
+
+def digest(path: Path) -> str:
+    value = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+def nix_hash(hex_hash: str) -> str:
+    return "sha256-" + base64.b64encode(bytes.fromhex(hex_hash)).decode("ascii")
+
+
+def validate_asset(key: str, asset: Any) -> dict[str, Any]:
+    if not isinstance(asset, dict):
+        raise ValueError(f"metadata asset {key} is not an object")
+    name = asset.get("name")
+    asset_id = asset.get("assetId")
+    size = asset.get("size")
+    sha256 = asset.get("sha256")
+    if (
+        not isinstance(name, str)
+        or "/" in name
+        or name in (".", "..")
+        or not isinstance(asset_id, int)
+        or asset_id <= 0
+        or not isinstance(size, int)
+        or size <= 0
+        or not isinstance(sha256, str)
+        or HEX_RE.fullmatch(sha256) is None
+    ):
+        raise ValueError(f"invalid metadata for asset {key}")
+    api_url = f"https://api.github.com/repos/{REPOSITORY}/releases/assets/{asset_id}"
+    if asset.get("apiUrl") != api_url or asset.get("nixHash") != nix_hash(sha256):
+        raise ValueError(f"hash or API URL mismatch for asset {key}")
+    return asset
+
+
+def download(asset: dict[str, Any], destination: Path) -> None:
+    endpoint = f"repos/{REPOSITORY}/releases/assets/{asset['assetId']}"
+    with destination.open("wb") as output:
+        subprocess.run(
+            ["gh", "api", "--method", "GET", endpoint, "-H", "Accept: application/octet-stream"],
+            check=True,
+            stdout=output,
+        )
+    if destination.stat().st_size != asset["size"] or digest(destination) != asset["sha256"]:
+        raise ValueError(f"downloaded asset failed metadata verification: {asset['name']}")
+
+
+def parse_sums(path: Path, expected_names: set[str]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = SUM_RE.fullmatch(line)
+        if match is None:
+            raise ValueError(f"malformed SHA256SUMS line: {line!r}")
+        sha256, name = match.groups()
+        if name in result:
+            raise ValueError(f"duplicate SHA256SUMS entry: {name}")
+        result[name] = sha256
+    if set(result) != expected_names:
+        raise ValueError("SHA256SUMS does not contain exactly the two expected archives")
+    return result
+
+
+def main() -> int:
+    metadata = json.loads(METADATA.read_text(encoding="utf-8"))
+    if not isinstance(metadata, dict) or metadata.get("repository") != REPOSITORY:
+        raise ValueError("metadata names an unexpected repository")
+    assets_value = metadata.get("assets")
+    if not isinstance(assets_value, dict):
+        raise ValueError("metadata has no assets object")
+    assets = {key: validate_asset(key, assets_value.get(key)) for key in (*VARIANTS, "checksums")}
+
+    with tempfile.TemporaryDirectory(prefix="rustdesk-prefetch-") as directory:
+        temporary = Path(directory)
+        for asset in assets.values():
+            download(asset, temporary / asset["name"])
+
+        checksum = temporary / assets["checksums"]["name"]
+        sums = parse_sums(checksum, {assets[key]["name"] for key in VARIANTS})
+        subprocess.run(["sha256sum", "-c", checksum.name], cwd=temporary, check=True)
+        for key in VARIANTS:
+            asset = assets[key]
+            if sums[asset["name"]] != asset["sha256"]:
+                raise ValueError(f"SHA256SUMS disagrees with metadata for {asset['name']}")
+
+        clean_environment = os.environ.copy()
+        clean_environment.pop("GH_TOKEN", None)
+        clean_environment.pop("GITHUB_TOKEN", None)
+        for key in VARIANTS:
+            asset = assets[key]
+            result = subprocess.run(
+                ["nix-store", "--add-fixed", "sha256", str(temporary / asset["name"])],
+                check=True,
+                stdout=subprocess.PIPE,
+                text=True,
+                env=clean_environment,
+            )
+            print(f"{key}: {result.stdout.strip()}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
+        raise SystemExit(f"fetch-release: {error}") from error

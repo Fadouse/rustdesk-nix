@@ -1,45 +1,81 @@
 # rustdesk-nix
 
-A small Nix flake packaging RustDesk's official stable x86_64 AppImage.
+Nix packaging for the private prebuilt RustDesk Linux archives in
+`Fadouse/rustdesk-build`. The application is not compiled here. Two independent
+packages are exposed for `x86_64-linux`:
 
-## Use
+- `packages.x86_64-linux.x86_64-v3`
+- `packages.x86_64-linux.znver5`
+- `packages.x86_64-linux.default` (the `x86_64-v3` package)
+
+## Secure private-release prefetch
+
+A Nix derivation must never receive a GitHub credential. Authenticate `gh` with
+read access to `Fadouse/rustdesk-build`, then run:
 
 ```bash
-nix run .#rustdesk
-nix build .#rustdesk
-nix flake check --print-build-logs
+./scripts/fetch-release
 ```
 
-For unattended access on NixOS, import and enable the included module:
+The script downloads only the three asset IDs recorded in
+`release/metadata.json`, validates file sizes and metadata hashes, executes
+`sha256sum -c` against the release's `SHA256SUMS`, removes GitHub token variables
+before invoking Nix, and adds both archives with `nix-store --add-fixed sha256`.
+`package.nix` consumes them through `requireFile`; no token or private URL is
+placed in a derivation or the Nix store.
+
+Build either package without installing it:
+
+```bash
+nix build .#x86_64-v3
+nix build .#znver5
+```
+
+## NixOS modules
+
+`nixosModules.default` installs the selected package and optionally starts the
+hardened RustDesk service:
 
 ```nix
 {
-  inputs.rustdesk-nix.url = "path:/path/to/rustdesk-nix";
+  imports = [ rustdesk-nix.nixosModules.default ];
+  services.rustdesk.enable = true;
+  # services.rustdesk.package = rustdesk-nix.packages.x86_64-linux.znver5;
+}
+```
 
-  outputs = { nixpkgs, rustdesk-nix, ... }: {
-    nixosConfigurations.example = nixpkgs.lib.nixosSystem {
-      modules = [
-        rustdesk-nix.nixosModules.default
-        { services.rustdesk.enable = true; }
-      ];
-    };
+`nixosModules.security` includes the default module and adds separate GUI and
+service AppArmor profiles plus the ordered LSM stack
+`landlock,lockdown,yama,integrity,apparmor,bpf`:
+
+```nix
+{
+  imports = [ rustdesk-nix.nixosModules.security ];
+  services.rustdesk = {
+    enable = true;
+    security.enable = true;
   };
 }
 ```
 
-The module installs the same package system-wide, runs `rustdesk --service` as
-a root system service, and lets RustDesk start one server process for the active
-graphical user. Do not also add the package separately through Home Manager
-unless you intentionally want duplicate profile entries.
+The service keeps Wayland/X11, PipeWire, network and required input-device
+access while applying systemd hardening. The profiles deny SSH private keys,
+other users' homes and kernel debug interfaces by default. The wrapper contains
+no GPU-vendor detection, driver selection, codec patch, or machine-specific
+hardware setting; those remain the host configuration's responsibility.
 
-## Updating
+## Automation and checks
 
-```bash
-python3 -m unittest discover -s tests -v
-python3 scripts/update.py
-nix flake check --print-build-logs
-```
+`Synchronize private RustDesk release` uses only the repository secret
+`PRIVATE_RELEASE_TOKEN` to read the latest private release. It verifies all
+assets, refuses a rollback, updates metadata, validates the Nix builds/checks,
+and commits to `dev` only. It never merges `main`.
 
-The scheduled GitHub Actions workflow checks RustDesk's latest stable release daily. It validates the GitHub-provided SHA-256 digest and AppImage header, builds the result, and opens or updates an automation pull request. No release binaries are committed to this repository.
+CI performs only the approved non-runtime checks: release SHA verification,
+both package builds, file layout, NixOS module evaluation and AppArmor parsing
+with kernel loading disabled. It does not start the RustDesk GUI/service or
+perform remote desktop, capture, or input tests.
 
-Only `x86_64-linux` is supported.
+After an accepted merge to `main`, the release workflow tags
+`<binary-version>-nix.1`, exports each actual Nix store closure as `tar.zst`, and
+publishes the two closure archives plus `SHA256SUMS`.

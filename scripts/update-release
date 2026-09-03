@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Synchronize metadata with the latest private rustdesk-build release."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import re
+import subprocess
+import tempfile
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+METADATA = ROOT / "release" / "metadata.json"
+REPOSITORY = "Fadouse/rustdesk-build"
+LATEST_ENDPOINT = f"repos/{REPOSITORY}/releases/latest"
+TAG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
+SUM_RE = re.compile(r"([0-9a-f]{64})  ([A-Za-z0-9][A-Za-z0-9._+-]*)")
+VARIANTS = ("x86_64-v3", "znver5")
+
+
+def gh_json(endpoint: str) -> dict[str, Any]:
+    result = subprocess.run(
+        ["gh", "api", "--method", "GET", endpoint],
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    value = json.loads(result.stdout)
+    if not isinstance(value, dict):
+        raise ValueError("GitHub returned a non-object release")
+    return value
+
+
+def download(asset_id: int, destination: Path) -> None:
+    endpoint = f"repos/{REPOSITORY}/releases/assets/{asset_id}"
+    with destination.open("wb") as output:
+        subprocess.run(
+            ["gh", "api", "--method", "GET", endpoint, "-H", "Accept: application/octet-stream"],
+            check=True,
+            stdout=output,
+        )
+
+
+def digest(path: Path) -> str:
+    value = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+def nix_hash(hex_hash: str) -> str:
+    return "sha256-" + base64.b64encode(bytes.fromhex(hex_hash)).decode("ascii")
+
+
+def timestamp(value: Any) -> datetime:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise ValueError(f"invalid release timestamp: {value!r}")
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def selected_assets(release: dict[str, Any]) -> tuple[str, dict[str, dict[str, Any]]]:
+    if release.get("draft") is not False or release.get("prerelease") is not False:
+        raise ValueError("latest release is not a published non-prerelease")
+    tag = release.get("tag_name")
+    if not isinstance(tag, str) or TAG_RE.fullmatch(tag) is None:
+        raise ValueError(f"unsupported release tag: {tag!r}")
+
+    expected_names = {
+        "x86_64-v3": f"rustdesk-{tag}-linux-x86_64-v3.tar.zst",
+        "znver5": f"rustdesk-{tag}-linux-znver5.tar.zst",
+        "checksums": f"rustdesk-{tag}-SHA256SUMS",
+    }
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        raise ValueError("release has no asset list")
+
+    selected: dict[str, dict[str, Any]] = {}
+    for key, name in expected_names.items():
+        matches = [asset for asset in assets if isinstance(asset, dict) and asset.get("name") == name]
+        if len(matches) != 1:
+            raise ValueError(f"expected exactly one release asset named {name}")
+        asset = matches[0]
+        asset_id = asset.get("id")
+        size = asset.get("size")
+        if not isinstance(asset_id, int) or asset_id <= 0 or not isinstance(size, int) or size <= 0:
+            raise ValueError(f"invalid metadata for release asset {name}")
+        api_url = f"https://api.github.com/repos/{REPOSITORY}/releases/assets/{asset_id}"
+        download_url = f"https://github.com/{REPOSITORY}/releases/download/{tag}/{name}"
+        if asset.get("url") != api_url or asset.get("browser_download_url") != download_url:
+            raise ValueError(f"unexpected GitHub URL for release asset {name}")
+        selected[key] = {
+            "name": name,
+            "assetId": asset_id,
+            "apiUrl": api_url,
+            "downloadUrl": download_url,
+            "size": size,
+        }
+    return tag, selected
+
+
+def parse_sums(path: Path, expected_names: set[str]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = SUM_RE.fullmatch(line)
+        if match is None:
+            raise ValueError(f"malformed SHA256SUMS line: {line!r}")
+        sha256, name = match.groups()
+        if name in result:
+            raise ValueError(f"duplicate SHA256SUMS entry: {name}")
+        result[name] = sha256
+    if set(result) != expected_names:
+        raise ValueError("SHA256SUMS does not contain exactly the two expected archives")
+    return result
+
+
+def refuse_rollback(old: dict[str, Any], release: dict[str, Any]) -> None:
+    if old.get("repository") != REPOSITORY:
+        raise ValueError("existing metadata names an unexpected repository")
+    old_id = old.get("releaseId")
+    new_id = release.get("id")
+    if not isinstance(old_id, int) or not isinstance(new_id, int) or new_id <= 0:
+        raise ValueError("invalid release ID")
+    old_time = timestamp(old.get("publishedAt"))
+    new_time = timestamp(release.get("published_at"))
+    if new_time < old_time or (new_time == old_time and new_id < old_id):
+        raise ValueError("GitHub latest would roll metadata back to an older release")
+    if old.get("version") != release.get("tag_name") and new_time == old_time and new_id == old_id:
+        raise ValueError("release identity changed without a newer publication")
+
+
+def main() -> int:
+    old = json.loads(METADATA.read_text(encoding="utf-8"))
+    if not isinstance(old, dict):
+        raise ValueError("existing metadata is not an object")
+    release = gh_json(LATEST_ENDPOINT)
+    refuse_rollback(old, release)
+    tag, assets = selected_assets(release)
+
+    with tempfile.TemporaryDirectory(prefix="rustdesk-release-") as directory:
+        temporary = Path(directory)
+        for asset in assets.values():
+            destination = temporary / asset["name"]
+            download(asset["assetId"], destination)
+            if destination.stat().st_size != asset["size"]:
+                raise ValueError(f"size mismatch for {asset['name']}")
+
+        checksum_path = temporary / assets["checksums"]["name"]
+        sums = parse_sums(checksum_path, {assets[key]["name"] for key in VARIANTS})
+        subprocess.run(
+            ["sha256sum", "-c", checksum_path.name],
+            cwd=temporary,
+            check=True,
+        )
+
+        for key in VARIANTS:
+            asset = assets[key]
+            actual = digest(temporary / asset["name"])
+            if actual != sums[asset["name"]]:
+                raise ValueError(f"internal SHA-256 mismatch for {asset['name']}")
+            asset["sha256"] = actual
+            asset["nixHash"] = nix_hash(actual)
+        checksum_digest = digest(checksum_path)
+        assets["checksums"]["sha256"] = checksum_digest
+        assets["checksums"]["nixHash"] = nix_hash(checksum_digest)
+
+    release_id = release.get("id")
+    published_at = release.get("published_at")
+    if not isinstance(release_id, int):
+        raise ValueError("release has no numeric ID")
+    timestamp(published_at)
+    updated = {
+        "repository": REPOSITORY,
+        "releaseId": release_id,
+        "version": tag,
+        "publishedAt": published_at,
+        "assets": assets,
+    }
+    rendered = json.dumps(updated, indent=2) + "\n"
+    if rendered == METADATA.read_text(encoding="utf-8"):
+        print(f"rustdesk release metadata is current at {tag}")
+        return 0
+    METADATA.write_text(rendered, encoding="utf-8")
+    print(f"updated rustdesk release metadata to {tag}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
+        raise SystemExit(f"update-release: {error}") from error

@@ -1,0 +1,81 @@
+# RustDesk service: isolated state plus display, PipeWire, input and network.
+profile rustdesk-service flags=(attach_disconnected,mediate_deleted) {
+  network inet stream,
+  network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+  network unix stream,
+  network unix dgram,
+  network netlink raw,
+
+  capability chown,
+  capability dac_override,
+  capability fowner,
+  capability kill,
+  capability setgid,
+  capability setuid,
+  signal (receive),
+  signal (send) peer=rustdesk-service,
+
+  /nix/store/*-rustdesk-*/bin/rustdesk rix,
+  /nix/store/*-rustdesk-*/libexec/rustdesk/rustdesk ix,
+  /nix/store/** r,
+  /nix/store/**/*.so* mr,
+  /nix/store/*-rustdesk-*/libexec/rustdesk/** mr,
+  /nix/store/*-systemd-*/bin/loginctl ix,
+  /nix/store/*-xdg-utils-*/bin/xdg-open ix,
+
+  /etc/hosts r,
+  /etc/host.conf r,
+  /etc/nsswitch.conf r,
+  /etc/resolv.conf r,
+  /etc/passwd r,
+  /etc/group r,
+  /etc/machine-id r,
+  /etc/localtime r,
+  /etc/ssl/** r,
+  /etc/fonts/** r,
+
+  /proc/cpuinfo r,
+  /proc/meminfo r,
+  /proc/self/** r,
+  /proc/[0-9]*/{cmdline,stat,status} r,
+  /proc/sys/kernel/random/boot_id r,
+  /proc/sys/kernel/osrelease r,
+  /sys/devices/system/cpu/** r,
+  /sys/class/input/** r,
+
+  /var/lib/rustdesk/** rwk,
+  /var/cache/rustdesk/** rwk,
+  /run/rustdesk/** rwk,
+  /run/user/[0-9]*/{bus,wayland-*,pipewire-*} rw,
+  /run/user/[0-9]*/pulse/** rw,
+  /tmp/.X11-unix/* rw,
+  /dev/input/** rw,
+  /dev/uinput rw,
+  /dev/shm/** rw,
+  /dev/null rw,
+  /dev/urandom r,
+
+  /run/dbus/system_bus_socket rw,
+  dbus (send)
+       bus=system
+       path=/org/freedesktop/login1{,/**}
+       peer=(name=org.freedesktop.login1),
+  dbus (receive)
+       bus=system
+       peer=(name=org.freedesktop.login1),
+  dbus (send, receive)
+       bus=session
+       peer=(name=org.freedesktop.portal.Desktop),
+  dbus (send, receive)
+       bus=session
+       peer=(name=org.freedesktop.DBus),
+
+  deny /home/** rwklx,
+  deny /root/** rwklx,
+  deny /proc/{kcore,keys,sysrq-trigger} rwklx,
+  deny /proc/*/mem rwklx,
+  deny /sys/kernel/{debug,tracing}/** rwklx,
+  deny /sys/fs/bpf/** rwklx,
+}

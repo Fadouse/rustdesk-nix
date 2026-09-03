@@ -1,0 +1,88 @@
+name: Publish Nix closure release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-nix-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@b4b293eae0b79aac8a161bb32925a5508c9cca93 # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Determine release tag
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("release/metadata.json"))["version"])')
+          tag="${version}-nix.1"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" --repo Fadouse/rustdesk-nix >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify and prefetch private release
+        if: steps.release.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_RELEASE_TOKEN }}
+        run: ./scripts/fetch-release
+
+      - name: Build both variants
+        id: build
+        if: steps.release.outputs.exists == 'false'
+        run: |
+          v3=$(nix build --no-link --print-out-paths --print-build-logs .#x86_64-v3)
+          znver5=$(nix build --no-link --print-out-paths --print-build-logs .#znver5)
+          echo "v3=$v3" >> "$GITHUB_OUTPUT"
+          echo "znver5=$znver5" >> "$GITHUB_OUTPUT"
+
+      - name: Export Nix store closures
+        if: steps.release.outputs.exists == 'false'
+        env:
+          V3: ${{ steps.build.outputs.v3 }}
+          ZNVER5: ${{ steps.build.outputs.znver5 }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          zstd=$(nix build --no-link --print-out-paths --impure --expr             'let f = builtins.getFlake (toString ./.); in f.inputs.nixpkgs.legacyPackages.x86_64-linux.zstd')
+          export PATH="$zstd/bin:$PATH"
+          export_closure() {
+            local variant=$1 output=$2 archive="dist/rustdesk-${VERSION}-nix.1-${variant}-closure.tar.zst"
+            local list="$PWD/dist/${variant}.closure"
+            nix-store -qR "$output" | sort -u | sed 's|^/||' > "$list"
+            tar --create --zstd --file "$archive" --directory=/ --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --files-from="$list"
+          }
+          export_closure x86_64-v3 "$V3"
+          export_closure znver5 "$ZNVER5"
+          (cd dist && sha256sum *-closure.tar.zst > SHA256SUMS)
+          rm dist/*.closure
+
+      - name: Create tagged GitHub Release with exactly three assets
+        if: steps.release.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          gh release create "$TAG"             "dist/rustdesk-${VERSION}-nix.1-x86_64-v3-closure.tar.zst"             "dist/rustdesk-${VERSION}-nix.1-znver5-closure.tar.zst"             dist/SHA256SUMS             --repo Fadouse/rustdesk-nix             --target "$GITHUB_SHA"             --title "$TAG"             --notes "Nix store closures for RustDesk ${VERSION}. Import only after verifying SHA256SUMS."

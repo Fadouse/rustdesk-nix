@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@b4b293eae0b79aac8a161bb32925a5508c9cca93 # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Verify and prefetch private release
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_RELEASE_TOKEN }}
+        run: ./scripts/fetch-release
+
+      - name: Build both variants
+        run: nix build --print-build-logs .#x86_64-v3 .#znver5
+
+      - name: Check package file layout
+        run: nix build --print-build-logs .#checks.x86_64-linux.package-layout
+
+      - name: Evaluate NixOS modules
+        run: nix build --print-build-logs .#checks.x86_64-linux.module-evaluation
+
+      - name: Parse AppArmor profiles without loading them
+        run: nix build --print-build-logs .#checks.x86_64-linux.apparmor-syntax
