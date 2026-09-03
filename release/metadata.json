@@ -1,0 +1,35 @@
+{
+  "repository": "Fadouse/rustdesk-build",
+  "releaseId": 381403824,
+  "version": "git-20260902-0fd1a0eecba9-local.1",
+  "publishedAt": "2026-09-02T16:13:23Z",
+  "assets": {
+    "x86_64-v3": {
+      "name": "rustdesk-git-20260902-0fd1a0eecba9-local.1-linux-x86_64-v3.tar.zst",
+      "assetId": 541427272,
+      "apiUrl": "https://api.github.com/repos/Fadouse/rustdesk-build/releases/assets/541427272",
+      "downloadUrl": "https://github.com/Fadouse/rustdesk-build/releases/download/git-20260902-0fd1a0eecba9-local.1/rustdesk-git-20260902-0fd1a0eecba9-local.1-linux-x86_64-v3.tar.zst",
+      "size": 24663314,
+      "sha256": "22508a4d93f396500cc68659d465f15c288c874046d5730df2986cc9c77d2266",
+      "nixHash": "sha256-IlCKTZPzllAMxoZZ1GXxXCiMh0BG1XMN8phsycd9ImY="
+    },
+    "znver5": {
+      "name": "rustdesk-git-20260902-0fd1a0eecba9-local.1-linux-znver5.tar.zst",
+      "assetId": 541427271,
+      "apiUrl": "https://api.github.com/repos/Fadouse/rustdesk-build/releases/assets/541427271",
+      "downloadUrl": "https://github.com/Fadouse/rustdesk-build/releases/download/git-20260902-0fd1a0eecba9-local.1/rustdesk-git-20260902-0fd1a0eecba9-local.1-linux-znver5.tar.zst",
+      "size": 25431365,
+      "sha256": "37b909707b226b37a79641628db2456ee5f1256a85eae2aea7d8009560034f56",
+      "nixHash": "sha256-N7kJcHsiazenlkFijbJFbuXxJWqF6uKup9gAlWADT1Y="
+    },
+    "checksums": {
+      "name": "rustdesk-git-20260902-0fd1a0eecba9-local.1-SHA256SUMS",
+      "assetId": 541427281,
+      "apiUrl": "https://api.github.com/repos/Fadouse/rustdesk-build/releases/assets/541427281",
+      "downloadUrl": "https://github.com/Fadouse/rustdesk-build/releases/download/git-20260902-0fd1a0eecba9-local.1/rustdesk-git-20260902-0fd1a0eecba9-local.1-SHA256SUMS",
+      "size": 263,
+      "sha256": "e46431effb3336a994110be151c6917445d085b537bf8c050307d328bbe8f8e3",
+      "nixHash": "sha256-5GQx7/szNqmUEQvhUcaRdEXQhbU3v4wFAwfTKLvo+OM="
+    }
+  }
+}
