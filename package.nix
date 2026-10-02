@@ -11,11 +11,11 @@
 
 let
   pname = "rustdesk";
-  version = "1.4.9";
+  version = "1.5.0";
 
   src = fetchurl {
     url = "https://github.com/rustdesk/rustdesk/releases/download/${version}/rustdesk-${version}-x86_64.AppImage";
-    hash = "sha256-eQLNYKTymBfuviZooVyaGVKsaQ6Pewe/52IP7dTighc=";
+    hash = "sha256-Qi67kVtMcJ81Ec+ilBq879yx09YPZz9aIM+IpKssmqU=";
   };
 
   runtimePackages =
